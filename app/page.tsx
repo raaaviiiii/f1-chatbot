@@ -7,6 +7,13 @@ interface Message {
   content: string;
 }
 
+interface ChatSession {
+  id: string;
+  title: string;
+  messages: Message[];
+  createdAt: number;
+}
+
 function formatMessage(text: string) {
   const lines = text.split("\n");
   const elements: React.ReactNode[] = [];
@@ -34,9 +41,7 @@ function formatMessage(text: string) {
           marginBottom: "6px",
           borderBottom: "1px solid rgba(255,128,0,0.2)",
           paddingBottom: "4px"
-        }}>
-          {text}
-        </div>
+        }}>{text}</div>
       );
       continue;
     }
@@ -86,18 +91,49 @@ function renderInline(text: string): React.ReactNode {
   });
 }
 
+const WELCOME: Message = {
+  role: "assistant",
+  content: "Lights out and away we go.\n\nI'm **PITWALL** — your F1 Intelligence Hub for everything Formula 1. From the 1950 British Grand Prix to this season's championship battle.\n\nAsk me about drivers, teams, strategy, regulations, lap records, controversies — anything in the paddock.",
+};
+
+function generateId() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2);
+}
+
+function generateTitle(userMessage: string): string {
+  return userMessage.length > 40 ? userMessage.slice(0, 40) + "..." : userMessage;
+}
+
+function loadSessions(): ChatSession[] {
+  try {
+    const raw = localStorage.getItem("pitwall_sessions");
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveSessions(sessions: ChatSession[]) {
+  try {
+    localStorage.setItem("pitwall_sessions", JSON.stringify(sessions));
+  } catch {}
+}
+
 export default function Home() {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      role: "assistant",
-      content: "Lights out and away we go.\n\nI'm **PITWALL** — your F1 Intelligence Hub for everything Formula 1. From the 1950 British Grand Prix to this season's championship battle.\n\nAsk me about drivers, teams, strategy, regulations, lap records, controversies — anything in the paddock.",
-    },
-  ]);
+  const [messages, setMessages] = useState<Message[]>([WELCOME]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [lapTime, setLapTime] = useState("1:23.456");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  // Load sessions from localStorage on mount
+  useEffect(() => {
+    setSessions(loadSessions());
+  }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -111,6 +147,45 @@ export default function Home() {
     }, 2200);
     return () => clearInterval(interval);
   }, []);
+
+  function startNewChat() {
+    setMessages([WELCOME]);
+    setCurrentSessionId(null);
+    setInput("");
+    setSidebarOpen(false);
+  }
+
+  function loadSession(session: ChatSession) {
+    setMessages(session.messages);
+    setCurrentSessionId(session.id);
+    setSidebarOpen(false);
+  }
+
+  function deleteSession(id: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    const updated = sessions.filter((s) => s.id !== id);
+    setSessions(updated);
+    saveSessions(updated);
+    if (currentSessionId === id) startNewChat();
+  }
+
+  function saveCurrentSession(msgs: Message[], sessionId: string | null, firstUserMsg: string): string {
+    const id = sessionId || generateId();
+    const title = generateTitle(firstUserMsg);
+
+    const updated = sessions.filter((s) => s.id !== id);
+    const newSession: ChatSession = {
+      id,
+      title,
+      messages: msgs,
+      createdAt: Date.now(),
+    };
+
+    const newSessions = [newSession, ...updated];
+    setSessions(newSessions);
+    saveSessions(newSessions);
+    return id;
+  }
 
   async function sendMessage(text?: string) {
     const userText = text || input;
@@ -151,6 +226,13 @@ export default function Home() {
       }
 
       setStreaming(false);
+
+      // Save session after response completes
+      const finalMessages = [...updatedMessages, { role: "assistant" as const, content: fullText }];
+      const firstUserMsg = updatedMessages.find((m) => m.role === "user")?.content || userText;
+      const newId = saveCurrentSession(finalMessages, currentSessionId, firstUserMsg);
+      if (!currentSessionId) setCurrentSessionId(newId);
+
     } catch {
       setLoading(false);
       setStreaming(false);
@@ -290,6 +372,185 @@ export default function Home() {
           66% { transform: translate(-20px, 15px) scale(0.95); }
         }
 
+        /* Sidebar overlay */
+        .sidebar-overlay {
+          position: fixed;
+          inset: 0;
+          background: rgba(0,0,0,0.6);
+          z-index: 10;
+          opacity: 0;
+          pointer-events: none;
+          transition: opacity 0.3s ease;
+          backdrop-filter: blur(4px);
+        }
+
+        .sidebar-overlay.open {
+          opacity: 1;
+          pointer-events: all;
+        }
+
+        /* Sidebar */
+        .sidebar {
+          position: fixed;
+          top: 0; left: 0; bottom: 0;
+          width: 300px;
+          background: rgba(8,8,12,0.98);
+          border-right: 1px solid rgba(225,6,0,0.3);
+          z-index: 11;
+          display: flex;
+          flex-direction: column;
+          transform: translateX(-100%);
+          transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+          box-shadow: 4px 0 30px rgba(225,6,0,0.1);
+        }
+
+        .sidebar.open {
+          transform: translateX(0);
+        }
+
+        .sidebar-header {
+          padding: 20px;
+          border-bottom: 1px solid rgba(255,255,255,0.06);
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+        }
+
+        .sidebar-title {
+          font-family: 'Orbitron', monospace;
+          font-size: 11px;
+          font-weight: 700;
+          color: rgba(255,255,255,0.5);
+          letter-spacing: 3px;
+          text-transform: uppercase;
+        }
+
+        .new-chat-btn {
+          background: linear-gradient(135deg, #E10600, #8B0000);
+          border: none;
+          border-radius: 6px;
+          padding: 7px 14px;
+          font-family: 'Orbitron', monospace;
+          font-size: 9px;
+          font-weight: 700;
+          color: white;
+          letter-spacing: 1px;
+          cursor: pointer;
+          transition: all 0.2s;
+          text-transform: uppercase;
+        }
+
+        .new-chat-btn:hover {
+          transform: scale(1.04);
+          box-shadow: 0 0 16px rgba(225,6,0,0.5);
+        }
+
+        .sessions-list {
+          flex: 1;
+          overflow-y: auto;
+          padding: 12px;
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+          scrollbar-width: thin;
+          scrollbar-color: rgba(225,6,0,0.2) transparent;
+        }
+
+        .sessions-list::-webkit-scrollbar { width: 3px; }
+        .sessions-list::-webkit-scrollbar-thumb { background: rgba(225,6,0,0.3); border-radius: 3px; }
+
+        .session-item {
+          padding: 12px 14px;
+          border-radius: 8px;
+          border: 1px solid transparent;
+          cursor: pointer;
+          transition: all 0.2s;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          group: true;
+        }
+
+        .session-item:hover {
+          background: rgba(225,6,0,0.08);
+          border-color: rgba(225,6,0,0.2);
+        }
+
+        .session-item.active {
+          background: rgba(225,6,0,0.12);
+          border-color: rgba(225,6,0,0.35);
+        }
+
+        .session-icon {
+          width: 28px; height: 28px;
+          border-radius: 6px;
+          background: rgba(225,6,0,0.15);
+          border: 1px solid rgba(225,6,0,0.25);
+          display: flex; align-items: center; justify-content: center;
+          flex-shrink: 0;
+          font-size: 12px;
+        }
+
+        .session-info {
+          flex: 1;
+          min-width: 0;
+        }
+
+        .session-title {
+          font-size: 13px;
+          color: rgba(255,255,255,0.8);
+          font-weight: 500;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          letter-spacing: 0.2px;
+        }
+
+        .session-date {
+          font-size: 11px;
+          color: rgba(255,255,255,0.3);
+          margin-top: 2px;
+          font-family: 'Orbitron', monospace;
+          letter-spacing: 0.5px;
+        }
+
+        .session-delete {
+          width: 24px; height: 24px;
+          background: transparent;
+          border: none;
+          border-radius: 4px;
+          cursor: pointer;
+          display: flex; align-items: center; justify-content: center;
+          opacity: 0;
+          transition: all 0.2s;
+          flex-shrink: 0;
+          color: rgba(255,255,255,0.3);
+          font-size: 14px;
+        }
+
+        .session-item:hover .session-delete {
+          opacity: 1;
+        }
+
+        .session-delete:hover {
+          background: rgba(225,6,0,0.2);
+          color: #E10600;
+        }
+
+        .empty-sessions {
+          text-align: center;
+          padding: 40px 20px;
+          color: rgba(255,255,255,0.2);
+          font-size: 13px;
+          line-height: 1.6;
+          letter-spacing: 0.5px;
+        }
+
+        .empty-sessions div:first-child {
+          font-size: 24px;
+          margin-bottom: 8px;
+        }
+
         .chat-container {
           width: 100%;
           max-width: 800px;
@@ -329,6 +590,32 @@ export default function Home() {
           100% { transform: translateX(100%); }
         }
 
+        .menu-btn {
+          width: 34px; height: 34px;
+          background: rgba(255,255,255,0.05);
+          border: 1px solid rgba(255,255,255,0.1);
+          border-radius: 8px;
+          cursor: pointer;
+          display: flex; align-items: center; justify-content: center;
+          flex-direction: column;
+          gap: 4px;
+          transition: all 0.2s;
+          flex-shrink: 0;
+          padding: 8px;
+        }
+
+        .menu-btn:hover {
+          border-color: rgba(225,6,0,0.4);
+          background: rgba(225,6,0,0.08);
+        }
+
+        .menu-bar {
+          width: 16px; height: 1.5px;
+          background: rgba(255,255,255,0.6);
+          border-radius: 2px;
+          transition: all 0.2s;
+        }
+
         .pitwall-logo { display: flex; flex-direction: column; gap: 1px; }
 
         .pitwall-name {
@@ -352,8 +639,7 @@ export default function Home() {
         }
 
         .header-divider {
-          width: 1px;
-          height: 36px;
+          width: 1px; height: 36px;
           background: rgba(255,255,255,0.1);
           margin: 0 4px;
         }
@@ -526,8 +812,7 @@ export default function Home() {
 
         .cursor {
           display: inline-block;
-          width: 2px;
-          height: 14px;
+          width: 2px; height: 14px;
           background: #E10600;
           margin-left: 2px;
           vertical-align: middle;
@@ -687,6 +972,42 @@ export default function Home() {
         }
       `}</style>
 
+      {/* Sidebar overlay */}
+      <div className={`sidebar-overlay ${sidebarOpen ? "open" : ""}`} onClick={() => setSidebarOpen(false)} />
+
+      {/* Sidebar */}
+      <div className={`sidebar ${sidebarOpen ? "open" : ""}`}>
+        <div className="sidebar-header">
+          <div className="sidebar-title">Race History</div>
+          <button className="new-chat-btn" onClick={startNewChat}>+ New Chat</button>
+        </div>
+        <div className="sessions-list">
+          {sessions.length === 0 ? (
+            <div className="empty-sessions">
+              <div>🏁</div>
+              <div>No past sessions yet. Start a conversation to save it here.</div>
+            </div>
+          ) : (
+            sessions.map((session) => (
+              <div
+                key={session.id}
+                className={`session-item ${currentSessionId === session.id ? "active" : ""}`}
+                onClick={() => loadSession(session)}
+              >
+                <div className="session-icon">💬</div>
+                <div className="session-info">
+                  <div className="session-title">{session.title}</div>
+                  <div className="session-date">
+                    {new Date(session.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                  </div>
+                </div>
+                <button className="session-delete" onClick={(e) => deleteSession(session.id, e)}>✕</button>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+
       <div className="f1-app">
         <div className="orb orb-1" />
         <div className="orb orb-2" />
@@ -724,6 +1045,12 @@ export default function Home() {
 
         <div className="chat-container">
           <div className="header">
+            <button className="menu-btn" onClick={() => setSidebarOpen(true)}>
+              <div className="menu-bar" />
+              <div className="menu-bar" />
+              <div className="menu-bar" />
+            </button>
+
             <div className="pitwall-logo">
               <div className="pitwall-name">PIT<span>WALL</span></div>
               <div className="pitwall-sub">Your F1 Intelligence Hub</div>
@@ -762,9 +1089,7 @@ export default function Home() {
                   {msg.role === "assistant" ? (
                     <>
                       {formatMessage(msg.content)}
-                      {streaming && i === messages.length - 1 && (
-                        <span className="cursor" />
-                      )}
+                      {streaming && i === messages.length - 1 && <span className="cursor" />}
                     </>
                   ) : (
                     msg.content
