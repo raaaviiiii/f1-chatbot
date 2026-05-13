@@ -84,11 +84,9 @@ async function searchWeb(query: string): Promise<string> {
     });
 
     let result = "";
-
     if (response.answer) {
       result += `Summary: ${response.answer}\n\n`;
     }
-
     result += response.results
       .slice(0, 5)
       .map((r, i) => `[${i + 1}] ${r.title}\n${r.content}\nURL: ${r.url}`)
@@ -105,18 +103,16 @@ async function searchWeb(query: string): Promise<string> {
 export async function POST(request: Request) {
   const { messages } = await request.json();
 
-  console.log("📨 New message received");
-
   const tools: Anthropic.Tool[] = [
     {
       name: "web_search",
-      description: "Search the web for current Formula 1 information including race results, standings, driver news, team updates, lap records, and any recent F1 developments. Use this for anything that may have changed recently or that requires up-to-date information.",
+      description: "Search the web for current Formula 1 information including race results, standings, driver news, team updates, lap records, and any recent F1 developments.",
       input_schema: {
         type: "object" as const,
         properties: {
           query: {
             type: "string",
-            description: "The search query. Be specific — include driver names, team names, race names, and years for best results. Always include 2026 for current season queries.",
+            description: "The search query. Always include 2026 for current season queries.",
           },
         },
         required: ["query"],
@@ -124,13 +120,10 @@ export async function POST(request: Request) {
     },
   ];
 
+  // Run agentic loop first to handle tool calls
   let currentMessages = [...messages];
-  let iteration = 0;
 
   while (true) {
-    iteration++;
-    console.log(`🔄 Claude iteration ${iteration}`);
-
     const response = await client.messages.create({
       model: "claude-sonnet-4-6",
       max_tokens: 2048,
@@ -138,8 +131,6 @@ export async function POST(request: Request) {
       tools,
       messages: currentMessages,
     });
-
-    console.log("⏹ Stop reason:", response.stop_reason);
 
     if (response.stop_reason === "tool_use") {
       const assistantMessage = {
@@ -149,10 +140,8 @@ export async function POST(request: Request) {
       currentMessages = [...currentMessages, assistantMessage];
 
       const toolResults = [];
-
       for (const block of response.content) {
         if (block.type === "tool_use" && block.name === "web_search") {
-          console.log("🛠 Tool called:", block.input);
           const input = block.input as { query: string };
           const searchResult = await searchWeb(input.query);
           toolResults.push({
@@ -170,9 +159,35 @@ export async function POST(request: Request) {
       continue;
     }
 
-    const textBlock = response.content.find((b) => b.type === "text");
-    const text = textBlock && textBlock.type === "text" ? textBlock.text : "";
-    console.log("✅ Final response ready");
-    return Response.json({ message: text });
+    // Tool calls done — now stream the final response
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        const streamResponse = await client.messages.create({
+          model: "claude-sonnet-4-6",
+          max_tokens: 2048,
+          system: getSystemPrompt(),
+          messages: currentMessages,
+          stream: true,
+        });
+
+        for await (const event of streamResponse) {
+          if (
+            event.type === "content_block_delta" &&
+            event.delta.type === "text_delta"
+          ) {
+            controller.enqueue(encoder.encode(event.delta.text));
+          }
+        }
+        controller.close();
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Transfer-Encoding": "chunked",
+      },
+    });
   }
 }

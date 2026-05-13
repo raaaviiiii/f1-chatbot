@@ -15,13 +15,11 @@ function formatMessage(text: string) {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    // Empty line = spacer
     if (line.trim() === "") {
       elements.push(<div key={keyCounter++} style={{ height: "8px" }} />);
       continue;
     }
 
-    // H2/H3 headers
     if (line.startsWith("## ") || line.startsWith("### ")) {
       const text = line.replace(/^#{2,3}\s+/, "");
       elements.push(
@@ -43,7 +41,6 @@ function formatMessage(text: string) {
       continue;
     }
 
-    // Bullet points
     if (line.startsWith("- ") || line.startsWith("• ")) {
       const content = line.replace(/^[-•]\s+/, "");
       elements.push(
@@ -55,7 +52,6 @@ function formatMessage(text: string) {
       continue;
     }
 
-    // Numbered list
     const numberedMatch = line.match(/^(\d+)\.\s+(.+)/);
     if (numberedMatch) {
       elements.push(
@@ -67,7 +63,6 @@ function formatMessage(text: string) {
       continue;
     }
 
-    // Regular paragraph
     elements.push(
       <div key={keyCounter++} style={{ marginBottom: "2px" }}>
         {renderInline(line)}
@@ -95,11 +90,12 @@ export default function Home() {
   const [messages, setMessages] = useState<Message[]>([
     {
       role: "assistant",
-      content: "Lights out and away we go.\n\nI'm **APEX** — your AI Paddock Expert for everything Formula 1. From the 1950 British Grand Prix to this season's championship battle.\n\nAsk me about drivers, teams, strategy, regulations, lap records, controversies — anything in the paddock.",
+      content: "Lights out and away we go.\n\nI'm **PITWALL** — your F1 Intelligence Hub for everything Formula 1. From the 1950 British Grand Prix to this season's championship battle.\n\nAsk me about drivers, teams, strategy, regulations, lap records, controversies — anything in the paddock.",
     },
   ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [streaming, setStreaming] = useState(false);
   const [lapTime, setLapTime] = useState("1:23.456");
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -107,36 +103,58 @@ export default function Home() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Fake live lap time ticker
   useEffect(() => {
     const interval = setInterval(() => {
-      const min = 1;
       const sec = Math.floor(Math.random() * 40) + 10;
       const ms = Math.floor(Math.random() * 999).toString().padStart(3, "0");
-      setLapTime(`${min}:${sec.toString().padStart(2, "0")}.${ms}`);
+      setLapTime(`1:${sec.toString().padStart(2, "0")}.${ms}`);
     }, 2200);
     return () => clearInterval(interval);
   }, []);
 
-  async function sendMessage() {
-    if (!input.trim() || loading) return;
-    const userMessage: Message = { role: "user", content: input };
+  async function sendMessage(text?: string) {
+    const userText = text || input;
+    if (!userText.trim() || loading || streaming) return;
+
+    const userMessage: Message = { role: "user", content: userText };
     const updatedMessages = [...messages, userMessage];
     setMessages(updatedMessages);
     setInput("");
     setLoading(true);
+
+    const assistantMessage: Message = { role: "assistant", content: "" };
+    setMessages([...updatedMessages, assistantMessage]);
+
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messages: updatedMessages }),
       });
-      const data = await res.json();
-      setMessages([...updatedMessages, { role: "assistant", content: data.message }]);
-    } catch {
-      setMessages([...updatedMessages, { role: "assistant", content: "Something went wrong. Please try again." }]);
-    } finally {
+
+      if (!res.ok) throw new Error("Request failed");
+      if (!res.body) throw new Error("No response body");
+
       setLoading(false);
+      setStreaming(true);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let fullText = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        fullText += chunk;
+        setMessages([...updatedMessages, { role: "assistant", content: fullText }]);
+      }
+
+      setStreaming(false);
+    } catch {
+      setLoading(false);
+      setStreaming(false);
+      setMessages([...updatedMessages, { role: "assistant", content: "Something went wrong. Please try again." }]);
     }
   }
 
@@ -148,13 +166,15 @@ export default function Home() {
   }
 
   const suggestions = [
-    "What happened at the 1994 San Marino GP?",
+    "Who won the last F1 race?",
+    "Current 2026 championship standings",
     "Compare Senna vs Prost",
-    "Explain the 2021 Abu Dhabi controversy",
+    "What happened at the 1994 San Marino GP?",
     "How does DRS work?",
     "Best F1 car ever built?",
-    "Who has the most championships?",
   ];
+
+  const isThinking = loading && !streaming;
 
   return (
     <>
@@ -278,6 +298,7 @@ export default function Home() {
           flex-direction: column;
           position: relative;
           z-index: 1;
+          filter: drop-shadow(0 20px 40px rgba(225,6,0,0.4)) drop-shadow(0 40px 80px rgba(225,6,0,0.2));
         }
 
         .header {
@@ -308,13 +329,9 @@ export default function Home() {
           100% { transform: translateX(100%); }
         }
 
-        .apex-logo {
-          display: flex;
-          flex-direction: column;
-          gap: 1px;
-        }
+        .pitwall-logo { display: flex; flex-direction: column; gap: 1px; }
 
-        .apex-name {
+        .pitwall-name {
           font-family: 'Orbitron', monospace;
           font-weight: 900;
           font-size: 22px;
@@ -324,11 +341,9 @@ export default function Home() {
           text-shadow: 0 0 30px rgba(225,6,0,0.5);
         }
 
-        .apex-name span {
-          color: #E10600;
-        }
+        .pitwall-name span { color: #E10600; }
 
-        .apex-sub {
+        .pitwall-sub {
           font-size: 9px;
           color: rgba(255,255,255,0.3);
           letter-spacing: 3px;
@@ -343,11 +358,7 @@ export default function Home() {
           margin: 0 4px;
         }
 
-        .header-meta {
-          display: flex;
-          flex-direction: column;
-          gap: 3px;
-        }
+        .header-meta { display: flex; flex-direction: column; gap: 3px; }
 
         .header-meta-label {
           font-size: 9px;
@@ -372,33 +383,11 @@ export default function Home() {
           gap: 20px;
         }
 
-        .season-badge {
-          display: flex;
-          flex-direction: column;
-          align-items: flex-end;
-          gap: 2px;
-        }
+        .season-badge { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+        .season-label { font-size: 9px; color: rgba(255,255,255,0.25); letter-spacing: 2px; text-transform: uppercase; }
+        .season-value { font-family: 'Orbitron', monospace; font-size: 13px; font-weight: 700; color: white; letter-spacing: 2px; }
 
-        .season-label {
-          font-size: 9px;
-          color: rgba(255,255,255,0.25);
-          letter-spacing: 2px;
-          text-transform: uppercase;
-        }
-
-        .season-value {
-          font-family: 'Orbitron', monospace;
-          font-size: 13px;
-          font-weight: 700;
-          color: white;
-          letter-spacing: 2px;
-        }
-
-        .status-group {
-          display: flex;
-          align-items: center;
-          gap: 7px;
-        }
+        .status-group { display: flex; align-items: center; gap: 7px; }
 
         .status-label {
           font-size: 9px;
@@ -417,9 +406,26 @@ export default function Home() {
           animation: blink 2s ease-in-out infinite;
         }
 
+        .status-dot.thinking {
+          background: #FF8000;
+          box-shadow: 0 0 8px #FF8000;
+          animation: thinkingPulse 0.8s ease-in-out infinite;
+        }
+
+        .status-dot.streaming {
+          background: #E10600;
+          box-shadow: 0 0 8px #E10600;
+          animation: thinkingPulse 0.4s ease-in-out infinite;
+        }
+
         @keyframes blink {
-          0%, 100% { opacity: 1; box-shadow: 0 0 8px #00D26A; }
-          50% { opacity: 0.2; box-shadow: none; }
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.2; }
+        }
+
+        @keyframes thinkingPulse {
+          0%, 100% { transform: scale(1); opacity: 1; }
+          50% { transform: scale(1.4); opacity: 0.6; }
         }
 
         .speed-strip {
@@ -500,45 +506,69 @@ export default function Home() {
         }
 
         .bubble.ai {
-          background: rgba(255,255,255,0.035);
-          border: 1px solid rgba(255,255,255,0.07);
-          border-left: 2px solid rgba(225,6,0,0.55);
+          background: rgba(255,255,255,0.06);
+          border: 1px solid rgba(255,255,255,0.15);
+          border-left: 3px solid #E10600;
           border-radius: 0 12px 12px 12px;
-          color: rgba(255,255,255,0.88);
+          color: rgba(255,255,255,0.95);
+          box-shadow: 0 0 20px rgba(0,0,0,0.4), inset 0 0 30px rgba(255,255,255,0.02);
         }
 
         .bubble.user {
-          background: rgba(225,6,0,0.12);
-          border: 1px solid rgba(225,6,0,0.28);
-          border-right: 2px solid #E10600;
+          background: rgba(225,6,0,0.18);
+          border: 1px solid rgba(225,6,0,0.5);
+          border-right: 3px solid #FF8000;
           border-radius: 12px 0 12px 12px;
-          color: rgba(255,255,255,0.92);
+          color: #ffffff;
+          box-shadow: 0 0 20px rgba(225,6,0,0.15), inset 0 0 30px rgba(225,6,0,0.05);
           white-space: pre-wrap;
         }
 
-        .typing-bubble {
-          background: rgba(255,255,255,0.035);
-          border: 1px solid rgba(255,255,255,0.07);
-          border-left: 2px solid rgba(225,6,0,0.55);
-          border-radius: 0 12px 12px 12px;
-          padding: 16px 22px;
-          display: flex;
-          gap: 6px;
-          align-items: center;
+        .cursor {
+          display: inline-block;
+          width: 2px;
+          height: 14px;
+          background: #E10600;
+          margin-left: 2px;
+          vertical-align: middle;
+          animation: cursorBlink 0.7s ease-in-out infinite;
         }
 
-        .typing-dot {
-          width: 7px; height: 7px;
+        @keyframes cursorBlink {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0; }
+        }
+
+        .thinking-bubble {
+          background: rgba(255,128,0,0.06);
+          border: 1px solid rgba(255,128,0,0.2);
+          border-left: 3px solid #FF8000;
+          border-radius: 0 12px 12px 12px;
+          padding: 14px 18px;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          color: rgba(255,255,255,0.5);
+          font-size: 12px;
+          letter-spacing: 1px;
+          font-family: 'Orbitron', monospace;
+          box-shadow: 0 0 20px rgba(255,128,0,0.08);
+        }
+
+        .thinking-dots { display: flex; gap: 4px; }
+
+        .thinking-dot {
+          width: 6px; height: 6px;
           border-radius: 50%;
-          background: #E10600;
+          background: #FF8000;
           animation: typingBounce 1.2s ease-in-out infinite;
         }
-        .typing-dot:nth-child(2) { animation-delay: 0.2s; background: #FF8000; }
-        .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+        .thinking-dot:nth-child(2) { animation-delay: 0.2s; }
+        .thinking-dot:nth-child(3) { animation-delay: 0.4s; }
 
         @keyframes typingBounce {
           0%, 60%, 100% { transform: translateY(0); opacity: 0.35; }
-          30% { transform: translateY(-7px); opacity: 1; }
+          30% { transform: translateY(-6px); opacity: 1; }
         }
 
         .suggestions {
@@ -554,8 +584,8 @@ export default function Home() {
 
         .sug-btn {
           background: transparent;
-          border: 1px solid rgba(225,6,0,0.22);
-          color: rgba(255,255,255,0.4);
+          border: 1px solid rgba(225,6,0,0.3);
+          color: rgba(255,255,255,0.5);
           padding: 6px 14px;
           font-family: 'Rajdhani', sans-serif;
           font-size: 12px;
@@ -570,7 +600,7 @@ export default function Home() {
         .sug-btn:hover {
           border-color: #E10600;
           color: white;
-          background: rgba(225,6,0,0.1);
+          background: rgba(225,6,0,0.12);
           box-shadow: 0 0 14px rgba(225,6,0,0.25);
           transform: translateY(-1px);
         }
@@ -579,12 +609,13 @@ export default function Home() {
           display: flex;
           gap: 10px;
           padding: 16px 20px 20px;
-          background: rgba(8,8,12,0.95);
+          background: rgba(15,10,10,0.98);
           backdrop-filter: blur(20px);
-          border: 1px solid rgba(225,6,0,0.25);
-          border-top: none;
+          border: 1px solid rgba(225,6,0,0.5);
+          border-top: 1px solid rgba(225,6,0,0.3);
           border-radius: 0 0 16px 16px;
           position: relative;
+          box-shadow: 0 0 30px rgba(225,6,0,0.15), 0 0 60px rgba(225,6,0,0.06), inset 0 1px 0 rgba(225,6,0,0.2);
         }
 
         .input-area::after {
@@ -597,10 +628,17 @@ export default function Home() {
           animation: scanline 3s linear infinite reverse;
         }
 
+        .input-row {
+          flex: 1;
+          display: flex;
+          gap: 10px;
+          align-items: flex-end;
+        }
+
         .chat-input {
           flex: 1;
-          background: rgba(255,255,255,0.04);
-          border: 1px solid rgba(255,255,255,0.09);
+          background: rgba(255,255,255,0.12);
+          border: 1px solid rgba(255,255,255,0.35);
           border-radius: 8px;
           padding: 12px 16px;
           font-family: 'Rajdhani', sans-serif;
@@ -613,13 +651,14 @@ export default function Home() {
           max-height: 120px;
           transition: border-color 0.2s, box-shadow 0.2s;
           letter-spacing: 0.3px;
+          box-shadow: 0 0 0 1px rgba(255,255,255,0.08), inset 0 0 20px rgba(255,255,255,0.03);
         }
 
-        .chat-input::placeholder { color: rgba(255,255,255,0.22); }
+        .chat-input::placeholder { color: rgba(255,255,255,0.35); }
 
         .chat-input:focus {
-          border-color: rgba(225,6,0,0.45);
-          box-shadow: 0 0 0 2px rgba(225,6,0,0.07), inset 0 0 24px rgba(225,6,0,0.03);
+          border-color: rgba(225,6,0,0.7);
+          box-shadow: 0 0 0 2px rgba(225,6,0,0.12), 0 0 20px rgba(225,6,0,0.1);
         }
 
         .send-btn {
@@ -630,7 +669,6 @@ export default function Home() {
           cursor: pointer;
           display: flex; align-items: center; justify-content: center;
           flex-shrink: 0;
-          align-self: flex-end;
           transition: all 0.2s;
           clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
         }
@@ -686,9 +724,9 @@ export default function Home() {
 
         <div className="chat-container">
           <div className="header">
-            <div className="apex-logo">
-              <div className="apex-name">AP<span>E</span>X</div>
-              <div className="apex-sub">AI Paddock Expert</div>
+            <div className="pitwall-logo">
+              <div className="pitwall-name">PIT<span>WALL</span></div>
+              <div className="pitwall-sub">Your F1 Intelligence Hub</div>
             </div>
 
             <div className="header-divider" />
@@ -704,8 +742,10 @@ export default function Home() {
                 <div className="season-value">2026</div>
               </div>
               <div className="status-group">
-                <span className="status-label">Online</span>
-                <div className="status-dot" />
+                <span className="status-label">
+                  {isThinking ? "Searching" : streaming ? "Streaming" : "Online"}
+                </span>
+                <div className={`status-dot ${isThinking ? "thinking" : streaming ? "streaming" : ""}`} />
               </div>
             </div>
           </div>
@@ -716,50 +756,65 @@ export default function Home() {
             {messages.map((msg, i) => (
               <div key={i} className={`msg-row ${msg.role}`}>
                 <div className={`avatar ${msg.role === "assistant" ? "ai" : "user"}`}>
-                  {msg.role === "assistant" ? "APEX" : "YOU"}
+                  {msg.role === "assistant" ? "PW" : "YOU"}
                 </div>
                 <div className={`bubble ${msg.role === "assistant" ? "ai" : "user"}`}>
-                  {msg.role === "assistant" ? formatMessage(msg.content) : msg.content}
+                  {msg.role === "assistant" ? (
+                    <>
+                      {formatMessage(msg.content)}
+                      {streaming && i === messages.length - 1 && (
+                        <span className="cursor" />
+                      )}
+                    </>
+                  ) : (
+                    msg.content
+                  )}
                 </div>
               </div>
             ))}
 
-            {loading && (
+            {isThinking && (
               <div className="msg-row assistant">
-                <div className="avatar ai">APEX</div>
-                <div className="typing-bubble">
-                  <div className="typing-dot" />
-                  <div className="typing-dot" />
-                  <div className="typing-dot" />
+                <div className="avatar ai">PW</div>
+                <div className="thinking-bubble">
+                  <div className="thinking-dots">
+                    <div className="thinking-dot" />
+                    <div className="thinking-dot" />
+                    <div className="thinking-dot" />
+                  </div>
+                  <span>Searching paddock data...</span>
                 </div>
               </div>
             )}
+
             <div ref={bottomRef} />
           </div>
 
           {messages.length <= 1 && (
             <div className="suggestions">
               {suggestions.map((s, i) => (
-                <button key={i} className="sug-btn" onClick={() => setInput(s)}>{s}</button>
+                <button key={i} className="sug-btn" onClick={() => sendMessage(s)}>{s}</button>
               ))}
             </div>
           )}
 
           <div className="input-area">
-            <textarea
-              className="chat-input"
-              placeholder="Ask APEX anything about Formula 1..."
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              rows={1}
-            />
-            <button className="send-btn" onClick={sendMessage} disabled={loading || !input.trim()}>
-              <svg className="send-icon" viewBox="0 0 24 24">
-                <line x1="22" y1="2" x2="11" y2="13" />
-                <polygon points="22 2 15 22 11 13 2 9 22 2" />
-              </svg>
-            </button>
+            <div className="input-row">
+              <textarea
+                className="chat-input"
+                placeholder="Ask PITWALL anything about Formula 1..."
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                rows={1}
+              />
+              <button className="send-btn" onClick={() => sendMessage()} disabled={loading || streaming || !input.trim()}>
+                <svg className="send-icon" viewBox="0 0 24 24">
+                  <line x1="22" y1="2" x2="11" y2="13" />
+                  <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                </svg>
+              </button>
+            </div>
           </div>
         </div>
       </div>
